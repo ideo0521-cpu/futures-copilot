@@ -34,6 +34,7 @@ jobs:
           end=$((SECONDS + 350*60))
           while [ $SECONDS -lt $end ]; do
             t0=$SECONDS
+            git pull -q --rebase origin main || true          # 每輪先抓最新程式，修正能馬上生效
             python monitor.py || echo "本輪失敗，下一輪重試"
             git add state.json docs/index.html
             git diff --cached --quiet || { git commit -q -m "update $(date -u +%FT%TZ)"; git pull -q --rebase origin main || true; git push -q || echo "push 失敗"; }
