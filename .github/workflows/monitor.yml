@@ -18,10 +18,10 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-      - run: pip install -q yfinance pandas numpy requests
+      - run: pip install -q -r requirements.txt
       - name: 盯盤＋更新網頁
         env:
-          NTFY_TOPIC: ${{ vars.NTFY_TOPIC }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           CAPITAL: ${{ vars.CAPITAL }}
           RISK_PCT: ${{ vars.RISK_PCT }}
           TOTAL_RISK_PCT: ${{ vars.TOTAL_RISK_PCT }}

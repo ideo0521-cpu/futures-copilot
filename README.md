@@ -6,4 +6,4 @@
 - 每次更新 `docs/index.html` → GitHub Pages 手機網頁
 
 可調整的變數（Settings → Secrets and variables → Actions → Variables）：
-`CAPITAL`（台幣資金，預設 1000000）、`RISK_PCT`（每筆風險 %，預設 1）、`TOTAL_RISK_PCT`（總風險上限 %，預設 5）、`NTFY_TOPIC`
+`CAPITAL`（台幣資金，預設 1000000）、`RISK_PCT`（每筆風險 %，預設 1）、`TOTAL_RISK_PCT`（總風險上限 %，預設 5）；手機通知頻道放在 Secrets 的 `NTFY_TOPIC`（不公開）
