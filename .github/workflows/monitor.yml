@@ -1,17 +1,20 @@
 name: futures-monitor
+# GitHub 的排程（cron）常常延遲或漏跑，所以改成：一次執行連續盯盤約 5 小時 50 分（每 5 分鐘一輪），
+# 結束前自動再啟動下一次，接力不中斷。cron 只當備援：萬一接力斷了，會在下一個整點重新接上。
 on:
   schedule:
-    - cron: "*/5 * * * *"      # 每 5 分鐘（GitHub 尖峰時可能晚幾分鐘）
+    - cron: "7 * * * *"
   workflow_dispatch:
 permissions:
   contents: write
+  actions: write
 concurrency:
   group: monitor
   cancel-in-progress: false
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 358
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -19,16 +22,25 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: pip install -q -r requirements.txt
-      - name: 盯盤＋更新網頁
+      - name: 每 5 分鐘盯盤＋更新網頁（約 5 小時 50 分）
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           CAPITAL: ${{ vars.CAPITAL }}
           RISK_PCT: ${{ vars.RISK_PCT }}
           TOTAL_RISK_PCT: ${{ vars.TOTAL_RISK_PCT }}
-        run: python monitor.py
-      - name: 存檔
         run: |
           git config user.name "monitor-bot"
           git config user.email "monitor-bot@users.noreply.github.com"
-          git add state.json docs/index.html
-          git diff --cached --quiet || (git commit -q -m "update $(date -u +%FT%TZ)" && git push -q)
+          end=$((SECONDS + 350*60))
+          while [ $SECONDS -lt $end ]; do
+            t0=$SECONDS
+            python monitor.py || echo "本輪失敗，下一輪重試"
+            git add state.json docs/index.html
+            git diff --cached --quiet || { git commit -q -m "update $(date -u +%FT%TZ)"; git pull -q --rebase origin main || true; git push -q || echo "push 失敗"; }
+            left=$((300 - (SECONDS - t0))); [ $left -gt 0 ] && sleep $left
+          done
+      - name: 接力：啟動下一次
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run monitor.yml --ref main
