@@ -41,7 +41,7 @@ jobs:
             left=$((300 - (SECONDS - t0))); [ $left -gt 0 ] && sleep $left
           done
       - name: 接力：啟動下一次
-        if: always()
+        if: ${{ !cancelled() }}      # 手動取消就不再接力
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh workflow run monitor.yml --ref main
