@@ -382,7 +382,7 @@ def write_board(st, now, fx):
         t = r["tick"]; sd = r["side"]
         tag = "多" if sd > 0 else ("空" if sd < 0 else "觀望")
         can = (f"{E(r['prod'])}×{r['lots']}" if r.get("lots") else "資金不足") if sd else ""
-        rows_a.append(f"<tr><td>{E(r['name'])} <small>{E(r['code'])}</small></td><td class={'l' if sd>0 else ('s' if sd<0 else 'z')}>{tag} {r['nag'] if sd else ''}/4</td>"
+        rows_a.append(f"<tr><td>{E(r['name'])} <small>{E(r['code'])}</small></td><td class={'l' if sd>0 else ('s' if sd<0 else 'z')}>{tag}{f" {r['nag']}/4" if sd else ''}</td>"
                       f"<td class=n>{fmt(r['last'], t)}</td><td class=n>{fmt(r['stop'], t) if r.get('stop') is not None else ''}</td><td>{can}</td><td class=n><small>{E(r['ts'])}</small></td></tr>")
     led = st["ledger"][-15:][::-1]
     rows_l = "".join(f"<tr><td>{E(x['d1'])}</td><td>{E(C.get(x['code'], (x['code'],))[0])}</td><td class='n {'g' if x['pnl']>=0 else 'r'}'>{x['pnl']:+,}</td></tr>" for x in led)
