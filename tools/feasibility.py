@@ -63,13 +63,14 @@ def curve(code):
         s = f"{code}{MC[mm]}{str(yy)[2:]}.{SUF[code]}"
         try:
             d = yf.Ticker(s).history(period="10d", interval="1d")
-            if len(d) and (now.tz_localize(None) - d.index[-1].tz_localize(None)).days <= 6 and d.Volume.iloc[-3:].sum() > 0:
-                pts.append((yy * 12 + mm, s, float(d.Close.iloc[-1]), int(d.Volume.iloc[-1])))
+            if len(d) and (now.tz_localize(None) - d.index[-1].tz_localize(None)).days <= 6:
+                pts.append((yy * 12 + mm, s, float(d.Close.iloc[-1]), int(d.Volume.iloc[-5:].sum()), str(d.index[-1].date())))
         except Exception: pass
-        if len(pts) >= 2: break
     if len(pts) < 2: return None
-    (m1, s1, p1, _), (m2, s2, p2, _) = pts[0], pts[1]
+    i = max(range(len(pts) - 1), key=lambda k: pts[k][3])          # 成交量最大的月份＝主力（排除最後一個，才有下一個月份可比）
+    (m1, s1, p1, v1, d1), (m2, s2, p2, v2, d2) = pts[i], pts[i + 1]
     ann = (p1 - p2) / p1 * 12 / (m2 - m1)
+    print(f"  曲線 {code}: 主力 {s1} {p1} 量{v1} @{d1} → 下一月 {s2} {p2} 量{v2} @{d2} ｜年化 {ann*100:+.1f}%")
     return dict(near=s1, p1=p1, far=s2, p2=p2, ann=ann, side=int(np.sign(ann)))
 # ── 3. 逐檔試算 ──
 rows, book = [], []
