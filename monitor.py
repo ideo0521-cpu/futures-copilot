@@ -283,18 +283,28 @@ def tfx_ref(M, cid):
     return None, "期交所目前沒有報價"
 
 # ───────────────────────── 第二、第三報價來源 ─────────────────────────
+def tv_months(code, n=4):
+    """接下來 n 個上市月份的 TradingView 合約代號，例如 CBOT:ZCH2027"""
+    if code == "TX": return []
+    ml = MONTHS.get(code) or ("FGHJKMNQUVXZ" if code in ("BTC",) else "HMUZ")
+    t0 = now_tp(); L = []
+    for i in range(0, 24):
+        y, m = divmod(t0.month - 1 + i, 12); y += t0.year
+        if MCODE[m] in ml: L.append(TV[code].replace("1!", f"{MCODE[m]}{y}"))
+        if len(L) >= n: break
+    return L
+
 def tv_quotes():
-    """TradingView 連續合約第 1、2 個月份（Yahoo 換月時間和 TradingView 不同，兩個都抓才能比到同一個合約）"""
+    """TradingView：連續近月（1!）＋接下來 3 個月份的個別合約（Yahoo 換月時間和 TradingView 不同，要比到同一個合約）"""
     try:
-        tick = list(TV.values()) + [v.replace("1!", "2!") for v in TV.values()]
-        r = rq().post("https://scanner.tradingview.com/futures/scan", headers=UA, timeout=20,
-                      json={"symbols": {"tickers": tick}, "columns": ["close", "time", "update_mode"]}).json()
-        inv = {v: (k, 1) for k, v in TV.items()}; inv.update({v.replace("1!", "2!"): (k, 2) for k, v in TV.items()})
+        ex = {code: tv_months(code) for code in TV}
+        tick = list(TV.values()) + [x for L in ex.values() for x in L]
+        r = rq().post("https://scanner.tradingview.com/futures/scan", headers=UA, timeout=30,
+                      json={"symbols": {"tickers": tick}, "columns": ["close"]}).json()
+        px = {x["s"]: float(x["d"][0]) for x in r.get("data", []) if x["d"][0] is not None}
         out = {}
-        for x in r.get("data", []):
-            if x["s"] in inv and x["d"][0] is not None:
-                k, n = inv[x["s"]]
-                out.setdefault(k, {})[n] = (float(x["d"][0]), pd.Timestamp(int(x["d"][1]), unit="s", tz="UTC").tz_convert(TZ).tz_localize(None) if x["d"][1] else None)
+        for code, sym in TV.items():
+            if sym in px: out[code] = {1: (px[sym], None), "c": [(s_.split(":")[1], px[s_]) for s_ in ex[code] if s_ in px]}
         return out
     except Exception as e:
         print("TradingView 失敗", e); return {}
@@ -478,14 +488,15 @@ def analyze(code, tvq, cnq):
     h = dict(state="ok", note="")
     tq2 = tvq.get(code) or {}
     tq = tq2.get(1)
-    if tq and 2 in tq2 and abs(last / tq[0] - 1) > 0.005 and abs(last / tq2[2][0] - 1) <= 0.005:
-        tq = tq2[2]; h["m2"] = True                                     # Yahoo 已換到下一個月份：改跟 TradingView 第 2 個月份比
+    if tq and abs(last / tq[0] - 1) > 0.005:                             # 和近月差太多：可能 Yahoo 已換到下一個月份，改比同一個合約
+        best = min(tq2.get("c", []), key=lambda x: abs(last / x[1] - 1), default=None)
+        if best and abs(last / best[1] - 1) <= 0.005: tq = (best[1], None); h["m2"] = best[0]
     opn = in_session(code, t)
     if tq:
         diff = (last - tq[0]) / tq[0] * 100
-        h.update(tv=tq[0], diff=diff, tv2=(tq2.get(2) or (None,))[0])
+        h.update(tv=tq[0], diff=diff)
         if abs(diff) > 0.5:
-            h.update(state="diff", note=f"與 TradingView 差 {diff:+.2f}%（TradingView 近月 {fmt(tq2[1][0], tick)}" + (f"、次月 {fmt(tq2[2][0], tick)}" if 2 in tq2 else "") + "）")
+            h.update(state="diff", note=f"與 TradingView 近月差 {diff:+.2f}%（TradingView 各月：" + "、".join(f"{a} {fmt(b, tick)}" for a, b in tq2.get("c", [])) + "）")
     else:
         h.update(state="nosrc", note="沒有第二來源")
     if h["state"] != "diff":
@@ -612,7 +623,7 @@ def card(r, M, cache):
     code, tk = r["code"], r["tick"]
     h = r["h"]; hs, hc = HEALTH[h["state"]]
     chk = []
-    if "tv" in h and h["state"] != "diff": chk.append(("Yahoo 已換到次月，對照 " if h.get("m2") else "") + f"TradingView {'次月' if h.get('m2') else ''}{fmt(h['tv'], tk)}（差 {h['diff']:+.2f}%）")
+    if "tv" in h and h["state"] != "diff": chk.append(f"TradingView {h['m2'] + ' ' if h.get('m2') else ''}{fmt(h['tv'], tk)}（差 {h['diff']:+.2f}%）")
     if "cn" in h: chk.append(f"鉅亨 {fmt(h['cn'][0], tk)}（{h['cn'][1]}，差 {h['cnd']:+.2f}%）")
     src = (f"<div class=src>{E(r['src'])}｜{E(r['kind'])}｜{tstr(r['t'])}<br><span class={hc}>● {hs}</span> "
            f"{E(h.get('note', ''))}{'｜' if h.get('note') and chk else ''}{E('｜'.join(chk))}</div>")
