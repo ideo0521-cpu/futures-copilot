@@ -23,7 +23,7 @@ def taifex_margins():
     out = {}
     for u in ["https://www.taifex.com.tw/cht/5/indexMarging", "https://www.taifex.com.tw/cht/5/commodityMarging", "https://www.taifex.com.tw/cht/5/currencyMarging", "https://www.taifex.com.tw/cht/5/stockMarging"]:
         try:
-            r = requests.get(u, headers=H, timeout=30); r.encoding = "utf-8"
+            r = requests.get(u, headers=H, timeout=60); r.encoding = "utf-8"
             for t in pd.read_html(io.StringIO(r.text)):
                 s = t.astype(str).to_string()
                 for nm, code in [("臺股期貨", "TX"), ("小型臺指", "MTX"), ("微型臺指", "TMF"), ("黃金期貨", "GDF"), ("歐元兌美元", "XEF"), ("英鎊兌美元", "XBF"), ("澳幣兌美元", "XAF"), ("美國標普500", "SPF"), ("美國那斯達克100", "UNF"), ("美國道瓊", "UDF")]:
@@ -34,7 +34,23 @@ def taifex_margins():
                             if nums and code not in out: out[code] = (nums, u.split("/")[-1])
         except Exception as e: print("期交所頁面失敗", u, e)
     return out
-TF = taifex_margins(); print("期交所官方保證金（數字欄＝結算/維持/原始）", TF)
+def ibff():
+    out = {}
+    for u in ["https://www.ibff.com.tw/market/margin/tw.aspx?xy=2&xt=1", "https://www.ibff.com.tw/market/margin/tw.aspx?xy=2&xt=2", "https://www.ibff.com.tw/market/margin/tw.aspx?xy=2&xt=3"]:
+        try:
+            r = requests.get(u, headers=H, timeout=45); r.encoding = "utf-8"
+            for t in pd.read_html(io.StringIO(r.text)):
+                for _, row in t.iterrows():
+                    v = [str(a) for a in row.values]; j = " ".join(v)
+                    for nm, code in [("臺股期貨", "TX"), ("小型臺指", "MTX"), ("微型臺指", "TMF"), ("黃金期貨", "GDF"), ("歐元兌美元", "XEF"), ("英鎊兌美元", "XBF"), ("澳幣兌美元", "XAF"), ("標普500", "SPF"), ("那斯達克", "UNF"), ("道瓊", "UDF")]:
+                        if nm in j and code not in out:
+                            nums = [float(a.replace(",", "")) for a in v if re.fullmatch(r"[\d,]+(\.\d+)?", a.strip())]
+                            if nums: out[code] = (nums, "ibff")
+        except Exception as e: print("ibff 失敗", u, e)
+    return out
+TF = taifex_margins()
+TF2 = ibff(); print("期貨商 ibff 保證金（結算/維持/原始）", TF2)
+for k, v in TF2.items(): TF.setdefault(k, v); print("期交所官方保證金（數字欄＝結算/維持/原始）", TF)
 # ── 2. 目前期限結構（商品類）：Yahoo 各月份合約，取最近兩個有成交的月份 ──
 SUF = {"CL": "NYM", "NG": "NYM", "HO": "NYM", "PL": "NYM", "PA": "NYM", "GC": "CMX", "SI": "CMX", "HG": "CMX",
        "ZC": "CBT", "ZS": "CBT", "ZW": "CBT", "ZL": "CBT", "ZM": "CBT", "CT": "NYB", "SB": "NYB", "KC": "NYB", "CC": "NYB", "HE": "CME", "LE": "CME"}
@@ -60,7 +76,9 @@ rows, book = [], []
 for code in M.C:
     r = M.analyze(code, CAP / fx, 0.5)                # 0.5% = 5,000 元
     if r.get("err"): rows.append(dict(商品=f"{M.C[code][0]} {code}", 判定="暫時排除：" + r["err"])); continue
-    last, N = r["last"], r["N"]; dist = 3 * N
+    D = M.fetch(M.C[code][1], "3y", "1d"); D = D[M.bar_done(code, D.index)]
+    dd = D.Close.diff(); sd = dd.rolling(60, min_periods=20).std().shift(1); dd = dd.where(~(dd.abs() > 6 * sd), 0.0)
+    N = float(dd.abs().ewm(span=20, adjust=False).mean().iloc[-1]); last = r["last"]; dist = 3 * N
     cv = curve(code) if code in SUF else None
     alts = sorted(M.ALT[code], key=lambda a: (a[1].startswith("期交所"), -0))     # CME 優先
     best = None
@@ -69,7 +87,7 @@ for code in M.C:
         per = (dist / t * vu + 2 * 2.5 + vu) * fx
         if ccy == "TWD": per += 2 * 2e-5 * last * (v / t)
         mg = NT.get(pc) if not desc.startswith("期交所") else None
-        if desc.startswith("期交所") and pc in TF: mg = TF[pc][0][-1] / (fx if ccy == "USD" and TF[pc][0][-1] > 5000 else 1) if ccy == "TWD" else TF[pc][0][-1]
+        if desc.startswith("期交所") and pc in TF: mg = max(TF[pc][0])
         mg_twd = mg * fx if (mg is not None and ccy == "USD") else mg
         lots = int(BUD // per)
         cand = dict(prod=pc, desc=desc, per=round(per), mg=None if mg_twd is None else round(mg_twd), lots=lots)
