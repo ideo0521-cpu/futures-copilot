@@ -174,7 +174,9 @@ def flip_levels(p):
 def rnd(x, t): return round(round(x / t) * t, 10)
 def fmt(x, t):
     ds = f"{t:.10f}".rstrip("0").split(".")[1] if t < 1 else ""
-    return f"{x:,.{min(len(ds), 7)}f}"
+    d = len(ds)
+    if d > 4 and t > 1e-4: d = 4                 # 美債的 1/32、1/64 報價：顯示到小數 4 位
+    return f"{x:,.{min(d, 7)}f}"
 
 def bar_done(code, idx):
     """哪些日K已經收盤。台指期：日盤 13:45 收（台北時間）。美國期貨：Yahoo 以交易日標日期，當天 17:00 美東（冬令 22:00 UTC）才收，
@@ -562,10 +564,8 @@ def main():
             for k in sorted(rec[r["code"]])[:-400]: del rec[r["code"]][k]
     # 訊號變化紀錄
     sig = st.setdefault("sig", {}); log = st.setdefault("log", [])
-    if "pos" in st and not st.get("seeded"):                 # 舊版的持倉紀錄＝當時的趨勢訊號，轉成訊號紀錄
-        for k, v in st["pos"].items():
-            log.append(dict(t=str(v.get("t0", v["d0"]))[:16], code=k, sys="趨勢", frm=None, to=v["side"], px=v["entry"]))
-        st["seeded"] = True
+    if not st.get("clean1"):                                  # 舊版持倉轉來的紀錄價格來自舊報價（含換月前合約），不可靠，清掉
+        log[:] = [x for x in log if x.get("frm") is not None]; st["clean1"] = True; st.pop("seeded", None)
     news_msg = []
     for r in R:
         for sysk, val, px in (("趨勢", r["side"], r["last"]), ("期限結構", r["cside"], (r["cv"] or {}).get("pa"))):
