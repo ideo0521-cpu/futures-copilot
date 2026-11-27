@@ -284,12 +284,18 @@ def tfx_ref(M, cid):
 
 # ───────────────────────── 第二、第三報價來源 ─────────────────────────
 def tv_quotes():
+    """TradingView 連續合約第 1、2 個月份（Yahoo 換月時間和 TradingView 不同，兩個都抓才能比到同一個合約）"""
     try:
+        tick = list(TV.values()) + [v.replace("1!", "2!") for v in TV.values()]
         r = rq().post("https://scanner.tradingview.com/futures/scan", headers=UA, timeout=20,
-                      json={"symbols": {"tickers": list(TV.values())}, "columns": ["close", "time", "update_mode"]}).json()
-        inv = {v: k for k, v in TV.items()}
-        return {inv[x["s"]]: (float(x["d"][0]), pd.Timestamp(int(x["d"][1]), unit="s", tz="UTC").tz_convert(TZ).tz_localize(None) if x["d"][1] else None)
-                for x in r.get("data", []) if x["s"] in inv and x["d"][0] is not None}
+                      json={"symbols": {"tickers": tick}, "columns": ["close", "time", "update_mode"]}).json()
+        inv = {v: (k, 1) for k, v in TV.items()}; inv.update({v.replace("1!", "2!"): (k, 2) for k, v in TV.items()})
+        out = {}
+        for x in r.get("data", []):
+            if x["s"] in inv and x["d"][0] is not None:
+                k, n = inv[x["s"]]
+                out.setdefault(k, {})[n] = (float(x["d"][0]), pd.Timestamp(int(x["d"][1]), unit="s", tz="UTC").tz_convert(TZ).tz_localize(None) if x["d"][1] else None)
+        return out
     except Exception as e:
         print("TradingView 失敗", e); return {}
 
@@ -428,6 +434,7 @@ def analyze(code, tvq, cnq):
     live = fetch(ysym, "1d", "1m")
     t = now_tp()
     fresh = live is not None and len(live) and t - live.index[-1] <= pd.Timedelta(minutes=40)
+    if code == "TX": fresh = live is not None and len(live) and live.index[-1] > D.index[-1] + pd.Timedelta(hours=13, minutes=45)
     if code == "TX":
         src = "期交所 MIS 臺指期近月"
         if fresh: last, t_, kind = float(live["Close"].iloc[-1]), live.index[-1], "成交價"
@@ -457,7 +464,10 @@ def analyze(code, tvq, cnq):
         if len(agree) >= n - 2: xref = agree[n - 3]
     # 報價健康度：和 TradingView（第二來源）比
     h = dict(state="ok", note="")
-    tq = tvq.get(code)
+    tq2 = tvq.get(code) or {}
+    tq = tq2.get(1)
+    if tq and 2 in tq2 and abs(last / tq[0] - 1) > 0.005 and abs(last / tq2[2][0] - 1) <= 0.005:
+        tq = tq2[2]; h["m2"] = True                                     # Yahoo 已換到下一個月份：改跟 TradingView 第 2 個月份比
     if tq:
         diff = (last - tq[0]) / tq[0] * 100
         h.update(tv=tq[0], tvt=tq[1], diff=diff)
@@ -587,7 +597,7 @@ def card(r, M, cache):
     code, tk = r["code"], r["tick"]
     h = r["h"]; hs, hc = HEALTH[h["state"]]
     chk = []
-    if "tv" in h: chk.append(f"TradingView {fmt(h['tv'], tk)}（{h['tvt']:%m/%d %H:%M}，差 {h['diff']:+.2f}%）" if h.get("tvt") is not None else f"TradingView {fmt(h['tv'], tk)}")
+    if "tv" in h: chk.append(("（Yahoo 已換到次月，對照 TradingView 次月）" if h.get("m2") else "") + f"TradingView {fmt(h['tv'], tk)}（{h['tvt']:%m/%d %H:%M}，差 {h['diff']:+.2f}%）" if h.get("tvt") is not None else f"TradingView {fmt(h['tv'], tk)}")
     if "cn" in h: chk.append(f"鉅亨 {fmt(h['cn'][0], tk)}（{h['cn'][1]}，差 {h['cnd']:+.2f}%）")
     src = (f"<div class=src>{E(r['src'])}｜{E(r['kind'])}｜{tstr(r['t'])}<br><span class={hc}>● {hs}</span> "
            f"{E(h.get('note', ''))}{'｜' if h.get('note') and chk else ''}{E('｜'.join(chk))}</div>")
