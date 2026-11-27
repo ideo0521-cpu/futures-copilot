@@ -32,7 +32,8 @@ for k, cc in CODE.items():
     pi = p.index.searchsorted(avail)
     ok = pi + 20 < len(p)
     e = pd.DataFrame({"idx": idx.values, "chg": chg.values, "pi": pi}, index=d.index)[ok].dropna()
-    e["r4"] = [(c[i + 20] - c[i]) / N.iloc[i] for i in e.pi]          # 未來 4 週報酬（N 單位）
+    e["r4"] = [(c[i + 20] - c[i]) / N.iloc[i] if N.iloc[i] > 0 else np.nan for i in e.pi]          # 未來 4 週報酬（N 單位）
+    e = e[np.isfinite(e.r4) & (e.pi > 260)]                          # 排除 N 還沒算穩的最前面一年
     e["code"] = k; e["sect"] = SECT[k]; rows.append(e)
     t, _ = simulate(c, c, c, c, p.index, tick, pv, 3, False)
     if len(t):
