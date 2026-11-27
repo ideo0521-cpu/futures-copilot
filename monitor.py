@@ -427,6 +427,18 @@ def curve(cache):
     cache.update(curve=out, curve_t=time.time())
 
 # ───────────────────────── 趨勢分析 ─────────────────────────
+def in_session(code, t):
+    """是否在交易時段（只判斷近 24 小時交易的商品；農產品、軟商品、畜產時段分段，不判斷回傳 None）"""
+    if code == "TX":
+        hm = t.strftime("%H:%M"); wd = t.weekday()
+        day = wd < 5 and "08:45" <= hm < "13:45"
+        night = ("15:00" <= hm and wd < 5) or (hm < "05:00" and 1 <= wd <= 5)
+        return day or night
+    if C[code][5] not in ("指數", "外匯", "能源", "金屬", "公債", "加密"): return None
+    et = t.tz_localize(TZ).tz_convert("America/New_York"); wd = et.weekday(); h = et.hour + et.minute / 60
+    if wd == 5 or (wd == 6 and h < 18) or (wd == 4 and h >= 17): return False
+    return not (17 <= h < 18)
+
 def analyze(code, tvq, cnq):
     name, ysym, tick, tv_, micro, grp, q = C[code]
     D = fetch(ysym, "3y", "1d")
@@ -438,12 +450,12 @@ def analyze(code, tvq, cnq):
     if code == "TX":
         src = "期交所 MIS 臺指期近月"
         if fresh: last, t_, kind = float(live["Close"].iloc[-1]), live.index[-1], "成交價"
-        else: last, t_, kind, src = float(D["Close"].iloc[-1]), D.index[-1], "日盤收盤價", "FinMind 期交所日行情 臺指期近月"
+        else: last, t_, kind, src = float(D["Close"].iloc[-1]), pd.Timestamp(D.index[-1].date()), "日盤收盤價", "FinMind 期交所日行情 臺指期近月"
     elif fresh:
         last, t_ = rt_adjust(code, float(live["Close"].iloc[-1]), live.index[-1])
         src = f"Yahoo {ysym}"; kind = "成交價（延遲約 10 分）" if code not in PROXY else "成交價＋即時匯率補正"
     else:
-        last, t_, src, kind = float(D["Close"].iloc[-1]), D.index[-1], f"Yahoo {ysym}", "日K收盤／結算價"
+        last, t_, src, kind = float(D["Close"].iloc[-1]), pd.Timestamp(D.index[-1].date()), f"Yahoo {ysym}", "日K收盤／結算價"
     Dc = D[bar_done(code, D.index)]
     p = Dc["Close"]; c = p.values
     sma200 = c[-200:].mean(); sma2 = c[-2:].mean()
@@ -462,23 +474,26 @@ def analyze(code, tvq, cnq):
         n = max(nl, ns)
         agree = [x for x in agree if (x < last if side == 1 else x > last)]
         if len(agree) >= n - 2: xref = agree[n - 3]
-    # 報價健康度：和 TradingView（第二來源）比
+    # 報價健康度：和 TradingView（第二來源）比價；交易時段內報價超過 40 分沒更新＝過期
     h = dict(state="ok", note="")
     tq2 = tvq.get(code) or {}
     tq = tq2.get(1)
     if tq and 2 in tq2 and abs(last / tq[0] - 1) > 0.005 and abs(last / tq2[2][0] - 1) <= 0.005:
         tq = tq2[2]; h["m2"] = True                                     # Yahoo 已換到下一個月份：改跟 TradingView 第 2 個月份比
+    opn = in_session(code, t)
     if tq:
         diff = (last - tq[0]) / tq[0] * 100
-        h.update(tv=tq[0], tvt=tq[1], diff=diff)
-        if tq[1] is not None and t_ is not None and tq[1] - t_ > pd.Timedelta(minutes=30) and t - tq[1] < pd.Timedelta(minutes=60):
-            h.update(state="stale", note=f"報價停在 {t_:%m/%d %H:%M}，第二來源已到 {tq[1]:%H:%M}")
-        elif abs(diff) > 0.5:
-            h.update(state="diff", note=f"與 TradingView 差 {diff:+.2f}%")
-        elif t - max(t_, tq[1] or t_) > pd.Timedelta(minutes=60):
-            h["state"] = "closed"
+        h.update(tv=tq[0], diff=diff, tv2=(tq2.get(2) or (None,))[0])
+        if abs(diff) > 0.5:
+            h.update(state="diff", note=f"與 TradingView 差 {diff:+.2f}%（TradingView 近月 {fmt(tq2[1][0], tick)}" + (f"、次月 {fmt(tq2[2][0], tick)}" if 2 in tq2 else "") + "）")
     else:
-        h.update(state="nosrc" if t - t_ < pd.Timedelta(minutes=60) else "closed", note="沒有第二來源")
+        h.update(state="nosrc", note="沒有第二來源")
+    if h["state"] != "diff":
+        if opn is None or opn: 
+            if opn and (t_ is None or t - t_ > pd.Timedelta(minutes=40) or not fresh):
+                h.update(state="stale", note=f"交易時段內報價停在 {tstr(t_)}")
+        else:
+            if h["state"] == "ok": h["state"] = "closed"
     if code in cnq:
         h["cn"] = cnq[code]
         d3 = (last - cnq[code][0]) / cnq[code][0] * 100
@@ -597,7 +612,7 @@ def card(r, M, cache):
     code, tk = r["code"], r["tick"]
     h = r["h"]; hs, hc = HEALTH[h["state"]]
     chk = []
-    if "tv" in h: chk.append(("（Yahoo 已換到次月，對照 TradingView 次月）" if h.get("m2") else "") + f"TradingView {fmt(h['tv'], tk)}（{h['tvt']:%m/%d %H:%M}，差 {h['diff']:+.2f}%）" if h.get("tvt") is not None else f"TradingView {fmt(h['tv'], tk)}")
+    if "tv" in h and h["state"] != "diff": chk.append(("Yahoo 已換到次月，對照 " if h.get("m2") else "") + f"TradingView {'次月' if h.get('m2') else ''}{fmt(h['tv'], tk)}（差 {h['diff']:+.2f}%）")
     if "cn" in h: chk.append(f"鉅亨 {fmt(h['cn'][0], tk)}（{h['cn'][1]}，差 {h['cnd']:+.2f}%）")
     src = (f"<div class=src>{E(r['src'])}｜{E(r['kind'])}｜{tstr(r['t'])}<br><span class={hc}>● {hs}</span> "
            f"{E(h.get('note', ''))}{'｜' if h.get('note') and chk else ''}{E('｜'.join(chk))}</div>")
