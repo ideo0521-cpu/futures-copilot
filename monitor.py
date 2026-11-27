@@ -235,10 +235,15 @@ def analyze(code, cap_usd, risk_pct):
     D = fetch(ysym, "3y", "1d")
     if D is None or len(D) < 300: return dict(code=code, name=name, err="抓不到日線資料")
     live = fetch(ysym, "1d", "1m")
-    last = float(live["Close"].iloc[-1]) if live is not None and len(live) else float(D["Close"].iloc[-1])
-    t_ = live.index[-1] if live is not None and len(live) else D.index[-1]
-    if live is not None and len(live): last, t_ = rt_adjust(code, last, t_)   # 用即時的代理報價把 10 分鐘延遲補到現在
-    ts = t_.strftime("%m/%d %H:%M")
+    now_tp = pd.Timestamp.now(tz="Asia/Taipei").tz_localize(None)
+    # Yahoo 的期貨分鐘線偶爾會停在舊資料（實測 2026/11 感恩節後卡在 11/25），而且換月時可能還是舊合約；
+    # 分鐘線超過 40 分鐘沒更新就不用，改用日K（與訊號同一份資料、同一個合約）的最新價
+    fresh = live is not None and len(live) and now_tp - live.index[-1] <= pd.Timedelta(minutes=40)
+    if fresh:
+        last, t_ = rt_adjust(code, float(live["Close"].iloc[-1]), live.index[-1])   # 用即時的代理報價把 10 分鐘延遲補到現在
+    else:
+        last, t_ = float(D["Close"].iloc[-1]), None
+    ts = t_.strftime("%m/%d %H:%M") if t_ is not None else "日K最新價"
     Dc = D[bar_done(code, D.index)]                                       # 只用已收盤日K
     p = Dc["Close"]   # 用盤面原始收盤（和你看圖一致）
     c = p.values
@@ -309,11 +314,15 @@ def main():
         name, tick = C[code][0], C[code][2]
         p = st["pos"].get(code)
         if p:
-            d = fetch(C[code][1], "1mo", "15m"); lo = hi = r["last"]         # 現價＋進場「之後」每 15 分鐘K的最高最低價
-            if d is not None and len(d):
-                ix = d.index.tz_convert(TZ) if d.index.tz is not None else d.index.tz_localize(TZ)   # 抓資料時已換成台北時間
-                d = d[ix > pd.Timestamp(p.get("t0") or p["d0"] + " 00:00+08:00")]
-                if len(d): lo, hi = min(lo, float(d["Low"].min())), max(hi, float(d["High"].max()))
+            lo = hi = r["last"]                                             # 現價
+            t0 = pd.Timestamp(p.get("t0") or p["d0"] + " 00:00+08:00")
+            d = fetch(C[code][1], "1mo", "15m")
+            if d is not None and len(d) and pd.Timestamp.now(tz=TZ).tz_localize(None) - d.index[-1] <= pd.Timedelta(minutes=40):
+                d = d[d.index.tz_localize(TZ) > t0]                          # 進場「之後」每 15 分鐘K的最高最低價
+            else:                                                             # 分鐘線不新鮮：用進場後「下一個交易日起」的日K高低
+                d = fetch(C[code][1], "1mo", "1d")
+                if d is not None and len(d): d = d[d.index.normalize() > trade_date(code, t0)]
+            if d is not None and len(d): lo, hi = min(lo, float(d["Low"].min())), max(hi, float(d["High"].max()))
             hit = (p["side"] == 1 and lo <= p["stop"]) or (p["side"] == -1 and hi >= p["stop"])
             if hit or r["side"] != p["side"]:
                 px = p["stop"] if hit else r["last"]
@@ -360,6 +369,12 @@ def main():
     write_board(st, now, fx)
     print(f"（{now:%H:%M} 檢查完成：新機會 {len(new)}、平倉 {len(closed)}）")
 
+
+def trade_date(code, t):
+    """台北時間 t 屬於哪個交易日。美國期貨：美東 18:00 後算下一個交易日；台指期：15:00 夜盤算下一個交易日。"""
+    t = pd.Timestamp(t).tz_convert(TZ) if pd.Timestamp(t).tz is not None else pd.Timestamp(t).tz_localize(TZ)
+    if code == "TX": return (t + pd.Timedelta(hours=9)).tz_localize(None).normalize()
+    return (t.tz_convert("America/New_York") + pd.Timedelta(hours=6)).tz_localize(None).normalize()
 
 def write_board(st, now, fx):
     E = html.escape
